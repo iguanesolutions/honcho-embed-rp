@@ -2,6 +2,9 @@
 
 Honcho Embed Reverse Proxy is a lightweight HTTP reverse proxy that intercepts OpenAI-compatible `/v1/embeddings` API requests. It automatically rewrites the model name and adds a `dimensions` parameter (default: 1536) before forwarding requests to the backend embedding server.
 
+**Backend URL Construction**: The proxy constructs the backend URL as `<target>/embeddings`, ignoring the incoming request path. Configure your target URL based on your backend's expected path format.
+
+
 ## Honcho Integration Trick
 
 This proxy implements the workaround described in [plastic-labs/honcho#404](https://github.com/plastic-labs/honcho/issues/404#issuecomment-4119420068) for running fully local Honcho deployments with custom embedding models.
@@ -31,7 +34,6 @@ This proxy's primary purpose is to:
 2. **Rewrite the model name** from the client-facing model name to the actual backend model name
 3. **Add dimensions parameter** set to 1536 to all embedding requests
 4. **Restore the original model name** in the response before sending it back to the client
-5. **Pass through all other requests** unchanged to the backend
 
 ## Installation
 
@@ -44,15 +46,21 @@ go build -o honcho-embed-rp .
 ## Usage
 
 ```bash
+# For OpenAI/vLLM backends with /v1 prefix
 ./honcho-embed-rp \
-  -target "http://127.0.0.1:8000" \
+  -target "http://127.0.0.1:8000/v1" \
   -served-model "Qwen/Qwen3-Embedding-4B"
+
+# For LiteLLM or backends without /v1 prefix
+./honcho-embed-rp \
+  -target "http://127.0.0.1:4000" \
+  -served-model "Qwen3 VL Embedding"
 ```
 
 Or using environment variables:
 
 ```bash
-export HONCHOEMBEDRP_TARGET="http://127.0.0.1:8000"
+export HONCHOEMBEDRP_TARGET="http://127.0.0.1:8000/v1"
 export HONCHOEMBEDRP_SERVED_MODEL_NAME="Qwen/Qwen3-Embedding-4B"
 ./honcho-embed-rp
 ```
@@ -65,16 +73,16 @@ Configure the proxy using command-line flags or environment variables:
 |------|---------------------|---------|-------------|
 | `-listen` | `HONCHOEMBEDRP_LISTEN` | `0.0.0.0` | IP address to listen on |
 | `-port` | `HONCHOEMBEDRP_PORT` | `9000` | Port to listen on |
-| `-target` | `HONCHOEMBEDRP_TARGET` | `http://127.0.0.1:8000` | Backend target URL |
+| `-target` | `HONCHOEMBEDRP_TARGET` | `http://127.0.0.1:8000/v1` | Backend base URL (proxy appends `/embeddings`) |
 | `-loglevel` | `HONCHOEMBEDRP_LOGLEVEL` | `INFO` | Log level (COMPLETE, DEBUG, INFO, WARN, ERROR) |
 | `-served-model` | `HONCHOEMBEDRP_SERVED_MODEL_NAME` | (required) | Backend model name to use in outgoing requests |
 | `-dimensions` | `HONCHOEMBEDRP_DIMENSIONS` | `1536` | Embedding dimensions (1536 for Honcho compatibility) |
 
 ## Request Routing
 
-- **`POST /v1/embeddings`**: Transformed (model name rewritten, dimensions=1536 added)
+- **`POST /v1/embeddings`**: Transformed (model name rewritten, dimensions parameter added)
 - **`GET /health`**: Health check endpoint (returns `{"status":"healthy"}`)
-- **All other paths**: Passed through unchanged to the backend
+- **All other paths**: Return 404
 
 ## Example Request/Response
 
@@ -98,6 +106,11 @@ POST /v1/embeddings
   "dimensions": 1536
 }
 ```
+
+**Backend URL Construction**: The proxy constructs the backend URL as `<target>/embeddings` by appending `/embeddings` to your target. For example:
+- Target `http://localhost:8000/v1` → Backend URL: `http://localhost:8000/v1/embeddings` (standard OpenAI/vLLM)
+- Target `http://localhost:4000` → Backend URL: `http://localhost:4000/embeddings` (LiteLLM or custom backends)
+
 
 **Client Response (model name restored for Honcho):**
 ```json
@@ -164,10 +177,11 @@ LLM_VLLM_API_KEY=your-api-key
 ```
 
 With this setup:
-- Honcho requests embeddings from `openai/text-embedding-3-large` at the proxy (hardcoded by openrouter provider)
-- Proxy rewrites to `Qwen/Qwen3-Embedding-4B` with `dimensions: 1536`
-- vLLM serves the Qwen model with Matryoshka embeddings at 1536 dimensions
-- Response model name is rewritten back to `openai/text-embedding-3-large` for Honcho compatibility
+ - Honcho requests embeddings from `openai/text-embedding-3-large` at the proxy (hardcoded by openrouter provider)
+ - Proxy rewrites model to `Qwen/Qwen3-Embedding-4B` and adds `dimensions: 1536`
+ - Backend receives request at `/v1/embeddings` (target + /embeddings)
+ - Response model name is rewritten back to `openai/text-embedding-3-large` for Honcho compatibility
+
 
 ## Health Check
 

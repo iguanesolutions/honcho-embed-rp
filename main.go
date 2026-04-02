@@ -54,6 +54,7 @@ func main() {
 	httplogger := httplog.New(logger, &httplog.Config{
 		RequestDumpLogLevel:  COMPLETE,
 		ResponseDumpLogLevel: COMPLETE,
+		// BodyMaxRead:          128 * 1024,
 	})
 	// Create pooled HTTP client for forwarding requests
 	httpClient := cleanhttp.DefaultPooledClient()
@@ -67,8 +68,6 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy"}`))
 	})
-	// Catch-all for all other paths (passthrough)
-	http.HandleFunc("/", httplogger.LogFunc(passthrough(httpClient, backendURL)))
 
 	// Prepare HTTP server and clean stop
 	server := &http.Server{Addr: fmt.Sprintf("%s:%d", cfg.Listen, cfg.Port)}

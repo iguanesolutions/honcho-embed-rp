@@ -27,3 +27,4 @@ go.work.sum
 
 # Dev
 /honcho-embed-rp
+server.log

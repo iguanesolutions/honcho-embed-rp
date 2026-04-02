@@ -27,6 +27,10 @@ func embeddings(httpCli *http.Client, target *url.URL, servedModel string, dimen
 		// Prepare
 		logger := logger.With(httplog.GetReqIDSLogAttr(r.Context()))
 		ctx := r.Context()
+		logger.Info("embeddings handler called",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+		)
 
 		// Read request body
 		requestBody, err := io.ReadAll(r.Body)
@@ -86,12 +90,34 @@ func embeddings(httpCli *http.Client, target *url.URL, servedModel string, dimen
 
 		// Prepare outgoing request
 		outreq := r.Clone(ctx)
-		rewriteRequestURL(outreq, target)
+		// Construct backend URL: target base + /embeddings (ignore incoming request path)
+		outreq.URL.Scheme = target.Scheme
+		outreq.URL.Host = target.Host
+		outreq.URL.Path = target.Path + "/embeddings"
+		outreq.URL.RawPath = target.RawPath + "/embeddings"
+		outreq.URL.RawQuery = target.RawQuery
+		outreq.Host = target.Host // Explicitly set Host header for backend
+		logger.Debug("backend URL constructed",
+			slog.String("target_base", target.String()),
+			slog.String("backend_path", outreq.URL.Path),
+			slog.String("final_url", outreq.URL.String()),
+		)
 		outreq.Body = io.NopCloser(bytes.NewReader(requestBody))
 		outreq.ContentLength = int64(len(requestBody))
+		outreq.Header.Del("Content-Length") // Remove old header, let Go set it from ContentLength field
 		outreq.RequestURI = ""
 
 		// Send request to backend
+		logger.Debug("sending request to backend",
+			slog.String("method", outreq.Method),
+			slog.String("url", outreq.URL.String()),
+			slog.String("content_length", outreq.Header.Get("Content-Length")),
+			slog.String("content_type", outreq.Header.Get("Content-Type")),
+			slog.String("authorization", outreq.Header.Get("Authorization")),
+			slog.String("user_agent", outreq.Header.Get("User-Agent")),
+			slog.String("host", outreq.Host),
+			slog.Any("all_headers", outreq.Header),
+		)
 		outResp, err := httpCli.Do(outreq)
 		if err != nil {
 			logger.Error("failed to send upstream request", slog.Any("error", err))
@@ -99,6 +125,25 @@ func embeddings(httpCli *http.Client, target *url.URL, servedModel string, dimen
 			return
 		}
 		defer outResp.Body.Close()
+		logger.Debug("backend response received",
+			slog.Int("status_code", outResp.StatusCode),
+			slog.String("status", outResp.Status),
+			slog.String("content_length", outResp.Header.Get("Content-Length")),
+			slog.String("content_type", outResp.Header.Get("Content-Type")),
+		)
+		// Read response body for debugging
+		respBody, readErr := io.ReadAll(outResp.Body)
+		if readErr == nil && outResp.StatusCode >= 400 {
+			logger.Error("backend returned error",
+				slog.Int("status_code", outResp.StatusCode),
+				slog.String("body", string(respBody)),
+			)
+			// Restore body for downstream processing
+			outResp.Body = io.NopCloser(bytes.NewReader(respBody))
+		} else if readErr == nil {
+			// Restore body for downstream processing
+			outResp.Body = io.NopCloser(bytes.NewReader(respBody))
+		}
 
 		// Copy response headers
 		for header, values := range outResp.Header {

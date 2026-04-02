@@ -49,7 +49,7 @@ func LoadConfig() (Config, error) {
 
 	listen := flag.String("listen", "0.0.0.0", "IP address to listen on")
 	port := flag.Int("port", 9000, "Port to listen on")
-	target := flag.String("target", "http://127.0.0.1:8000", "Backend target, default is for a local vLLM")
+	target := flag.String("target", "http://127.0.0.1:8000/v1", "Backend target, default is for a local vLLM")
 	loglevel := flag.String("loglevel", slog.LevelInfo.String(), "Log level (COMPLETE, DEBUG, INFO, WARN, ERROR)")
 	servedModel := flag.String("served-model", "", "Name of the served model")
 	dimensions := flag.Int("dimensions", 1536, "Embedding dimensions (default: 1536 for Honcho compatibility)")
