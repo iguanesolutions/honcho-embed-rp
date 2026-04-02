@@ -1,4 +1,4 @@
-name: Build & Push Docker image to GitHub Container Registry
+name: Build & Push honcho-embed-rp to GitHub Container Registry
 on:
   push:
     tags:
@@ -23,7 +23,7 @@ jobs:
       - name: Build, tag, and push docker image to GitHub Container Registry
         env:
           REGISTRY: ghcr.io
-          REPOSITORY: ${{ github.repository_owner }}/qwen35-rp
+          REPOSITORY: ${{ github.repository_owner }}/honcho-embed-rp
           IMAGE_TAG: ${{ github.ref_name }}
         run: |
           docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
@@ -32,7 +32,7 @@ jobs:
       - name: Also tag with latest
         env:
           REGISTRY: ghcr.io
-          REPOSITORY: ${{ github.repository_owner }}/qwen35-rp
+          REPOSITORY: ${{ github.repository_owner }}/honcho-embed-rp
           IMAGE_TAG: ${{ github.ref_name }}
         run: |
           docker tag $REGISTRY/$REPOSITORY:$IMAGE_TAG $REGISTRY/$REPOSITORY:latest
