@@ -10,15 +10,15 @@ This proxy implements the workaround described in [plastic-labs/honcho#404](http
 
 Honcho's embedding configuration has several hardcodes:
 - Only supports `openai`, `gemini`, or `openrouter` providers for custom base URLs
-- When using `openrouter` provider, model name is hardcoded to `openai/text-embedding-3-small`
+- When using `openrouter` provider, model name is hardcoded to `openai/text-embedding-3-large`
 - Database schema and code expect exactly 1536-dimensional embeddings
 
 ### The Solution
 
 This reverse proxy sits between Honcho and your embedding server (e.g., vLLM), performing these transformations:
 
-1. **Model name rewriting**: Honcho requests `openai/text-embedding-3-small` → proxy rewrites to your actual model (e.g., `Qwen/Qwen3-Embedding-4B`)
-2. **Dimensions injection**: Adds `dimensions: 1536` to all requests (required for Honcho compatibility)
+1. **Model name rewriting**: Honcho requests `openai/text-embedding-3-large` → proxy rewrites to your actual model (e.g., `Qwen/Qwen3-Embedding-4B`)
+2. **Dimensions injection**: Adds `dimensions: 1536` to all requests (configurable, default: 1536 for Honcho compatibility)
 3. **Response model fixing**: Rewrites model name back in responses so Honcho sees what it expects
 
 This allows you to use any embedding model with Honcho without modifying vLLM's `--served-model-name` or Honcho's source code.
@@ -46,14 +46,14 @@ go build -o honcho-embed-rp .
 ```bash
 ./honcho-embed-rp \
   -target "http://127.0.0.1:8000" \
-  -served-model "text-embedding-3-large"
+  -served-model "Qwen/Qwen3-Embedding-4B"
 ```
 
 Or using environment variables:
 
 ```bash
 export HONCHOEMBEDRP_TARGET="http://127.0.0.1:8000"
-export HONCHOEMBEDRP_SERVED_MODEL_NAME="text-embedding-3-large"
+export HONCHOEMBEDRP_SERVED_MODEL_NAME="Qwen/Qwen3-Embedding-4B"
 ./honcho-embed-rp
 ```
 
@@ -155,7 +155,6 @@ LLM_OPENAI_COMPATIBLE_API_KEY=sk-no-key-required
 # Use openrouter provider (supports custom base URL)
 # Honcho will request model: openai/text-embedding-3-large
 LLM_EMBEDDING_PROVIDER=openrouter
-```
 
 # vLLM provider for LLM calls (separate endpoint)
 DERIVER_PROVIDER=vllm
