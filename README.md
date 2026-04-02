@@ -1,56 +1,60 @@
-# qwen35-rp
+# honcho-embed-rp
 
-Qwen 3.5 Reverse Proxy is a lightweight HTTP reverse proxy that automatically adjusts sampling parameters (temperature, top_p, etc.) and thinking mode based on one of four predefined profiles. It sits between your application and the backend LLM server serving Qwen 3.5 (e.g., vLLM). It also provides a `/tokenize` endpoint for tokenizing messages using the backend's tokenizer.
+Honcho Embed Reverse Proxy is a lightweight HTTP reverse proxy that intercepts OpenAI-compatible `/v1/embeddings` API requests. It automatically rewrites the model name and adds a `dimensions` parameter (default: 1536) before forwarding requests to the backend embedding server.
+
+## Honcho Integration Trick
+
+This proxy implements the workaround described in [plastic-labs/honcho#404](https://github.com/plastic-labs/honcho/issues/404#issuecomment-4119420068) for running fully local Honcho deployments with custom embedding models.
+
+### The Problem
+
+Honcho's embedding configuration has several hardcodes:
+- Only supports `openai`, `gemini`, or `openrouter` providers for custom base URLs
+- When using `openrouter` provider, model name is hardcoded to `openai/text-embedding-3-small`
+- Database schema and code expect exactly 1536-dimensional embeddings
+
+### The Solution
+
+This reverse proxy sits between Honcho and your embedding server (e.g., vLLM), performing these transformations:
+
+1. **Model name rewriting**: Honcho requests `openai/text-embedding-3-small` → proxy rewrites to your actual model (e.g., `Qwen/Qwen3-Embedding-4B`)
+2. **Dimensions injection**: Adds `dimensions: 1536` to all requests (required for Honcho compatibility)
+3. **Response model fixing**: Rewrites model name back in responses so Honcho sees what it expects
+
+This allows you to use any embedding model with Honcho without modifying vLLM's `--served-model-name` or Honcho's source code.
 
 ## Core Functionality
 
 This proxy's primary purpose is to:
 
-1. **Accept requests for four virtual model names** (configured via `-thinking-general`, `-thinking-coding`, `-instruct-general`, and `-instruct-reasoning`), rejecting all other model names with HTTP 400
-2. **Set appropriate sampling parameters** automatically based on one of four profiles (official Qwen-recommended values from [Hugging Face](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8#using-qwen35-via-the-chat-completions-api)):
-   - **Thinking mode for general tasks**: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=1.5`, `repetition_penalty=1.0`
-   - **Thinking mode for precise coding tasks**: `temperature=0.6`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=0.0`, `repetition_penalty=1.0`
-   - **Instruct mode for general tasks**: `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0.0`, `presence_penalty=1.5`, `repetition_penalty=1.0`
-   - **Instruct mode for reasoning tasks**: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=1.5`, `repetition_penalty=1.0`
-3. **Configure thinking mode** by setting `chat_template_kwargs.enable_thinking`:
-   - `enable_thinking=true` for thinking modes (general and coding)
-   - `enable_thinking=false` for instruct modes (general and reasoning)
-4. **Rewrite the model name** to the actual backend model name (e.g., `Qwen/Qwen3.5-397B-A17B-FP8`) before forwarding to vLLM
-5. **Fix vLLM response bugs** where non-thinking, non-streaming responses incorrectly place content in `reasoning_content` or `reasoning` fields instead of `content`
-7. **Enrich `/v1/models` endpoint** by fetching backend models and exposing 4 virtual models with the same metadata (permissions, max_model_len, etc.)
-8. **Provide OpenAI Responses API compatibility** (`/v1/responses`) by converting requests to Chat Completions format and responses back to Responses format. This conversion is necessary because only vLLM's Chat Completions endpoint supports `chat_template_kwargs`, which is required to control Qwen's thinking mode (`enable_thinking=true/false`)
-9. **Provide a `/tokenize` endpoint** for tokenizing messages and counting tokens before making actual generation requests
+1. **Intercept `/v1/embeddings` requests** from clients
+2. **Rewrite the model name** from the client-facing model name to the actual backend model name
+3. **Add dimensions parameter** set to 1536 to all embedding requests
+4. **Restore the original model name** in the response before sending it back to the client
+5. **Pass through all other requests** unchanged to the backend
 
 ## Installation
 
 Requirements: Go 1.24.2 or later
 
 ```bash
-go build -o qwen35-rp .
+go build -o honcho-embed-rp .
 ```
 
 ## Usage
 
 ```bash
-./qwen35-rp \
+./honcho-embed-rp \
   -target "http://127.0.0.1:8000" \
-  -served-model "Qwen/Qwen3.5-397B-A17B-FP8" \
-  -thinking-general "qwen-thinking-general" \
-  -thinking-coding "qwen-thinking-coding" \
-  -instruct-general "qwen-instruct-general" \
-  -instruct-reasoning "qwen-instruct-reasoning"
+  -served-model "text-embedding-3-large"
 ```
 
 Or using environment variables:
 
 ```bash
-export QWEN35RP_TARGET="http://127.0.0.1:8000"
-export QWEN35RP_SERVED_MODEL_NAME="Qwen/Qwen3.5-397B-A17B-FP8"
-export QWEN35RP_THINKING_GENERAL_MODEL="qwen-thinking-general"
-export QWEN35RP_THINKING_CODING_MODEL="qwen-thinking-coding"
-export QWEN35RP_INSTRUCT_GENERAL_MODEL="qwen-instruct-general"
-export QWEN35RP_INSTRUCT_REASONING_MODEL="qwen-instruct-reasoning"
-./qwen35-rp
+export HONCHOEMBEDRP_TARGET="http://127.0.0.1:8000"
+export HONCHOEMBEDRP_SERVED_MODEL_NAME="text-embedding-3-large"
+./honcho-embed-rp
 ```
 
 ## Configuration
@@ -59,79 +63,112 @@ Configure the proxy using command-line flags or environment variables:
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
-| `-listen` | `QWEN35RP_LISTEN` | `0.0.0.0` | IP address to listen on |
-| `-port` | `QWEN35RP_PORT` | `9000` | Port to listen on |
-| `-target` | `QWEN35RP_TARGET` | `http://127.0.0.1:8000` | Backend target URL |
-| `-loglevel` | `QWEN35RP_LOGLEVEL` | `INFO` | Log level (COMPLETE, DEBUG, INFO, WARN, ERROR) |
-| `-served-model` | `QWEN35RP_SERVED_MODEL_NAME` | (required) | Backend model name to use in outgoing requests |
-| `-thinking-general` | `QWEN35RP_THINKING_GENERAL_MODEL` | (required) | Name of the thinking-general model (incoming request identifier) |
-| `-thinking-coding` | `QWEN35RP_THINKING_CODING_MODEL` | (required) | Name of the thinking-coding model (incoming request identifier) |
-| `-instruct-general` | `QWEN35RP_INSTRUCT_GENERAL_MODEL` | (required) | Name of the instruct-general model (incoming request identifier) |
-| `-instruct-reasoning` | `QWEN35RP_INSTRUCT_REASONING_MODEL` | (required) | Name of the instruct-reasoning model (incoming request identifier) |
-| `-enforce-sampling-params` | `QWEN35RP_ENFORCE_SAMPLING_PARAMS` | `false` | Enforce sampling parameters, overriding client-provided values |
-
-### Enforce Sampling Parameters
-
-By default, the proxy only sets sampling parameters if they are not already present in the request. When `-enforce-sampling-params` is enabled, the proxy will **always override** client-provided sampling parameters with the predefined values for the detected mode.
+| `-listen` | `HONCHOEMBEDRP_LISTEN` | `0.0.0.0` | IP address to listen on |
+| `-port` | `HONCHOEMBEDRP_PORT` | `9000` | Port to listen on |
+| `-target` | `HONCHOEMBEDRP_TARGET` | `http://127.0.0.1:8000` | Backend target URL |
+| `-loglevel` | `HONCHOEMBEDRP_LOGLEVEL` | `INFO` | Log level (COMPLETE, DEBUG, INFO, WARN, ERROR) |
+| `-served-model` | `HONCHOEMBEDRP_SERVED_MODEL_NAME` | (required) | Backend model name to use in outgoing requests |
+| `-dimensions` | `HONCHOEMBEDRP_DIMENSIONS` | `1536` | Embedding dimensions (1536 for Honcho compatibility) |
 
 ## Request Routing
 
-- **`GET /v1/models`**: Enriched (fetches backend models, validates served model, exposes 4 virtual models)
-- **`POST /v1/responses`**: Converted (Responses API → Chat Completions, with full response conversion)
-- **`POST /v1/chat/completions`**: Transformed (sampling params + thinking mode applied)
-- **`POST /v1/completions`**: Transformed (sampling params + thinking mode applied)
-- **`POST /tokenize`**: Converted (Responses/Chat Completions → Chat Completions format, returns token count and token IDs)
+- **`POST /v1/embeddings`**: Transformed (model name rewritten, dimensions=1536 added)
+- **`GET /health`**: Health check endpoint (returns `{"status":"healthy"}`)
 - **All other paths**: Passed through unchanged to the backend
 
-## Responses API Support
+## Example Request/Response
 
-The proxy provides full compatibility with OpenAI's [Responses API](https://platform.openai.com/docs/api-reference/responses), converting requests and responses to/from the Chat Completions API format.
+### Standard Usage
 
-**Why convert instead of forwarding to vLLM's `/v1/responses` endpoint?**
-
-Only vLLM's Chat Completions endpoint supports `chat_template_kwargs`, which is required to control Qwen's thinking mode (`enable_thinking=true/false`). By converting to Chat Completions, we can properly configure thinking mode based on the selected profile.
-
-### Supported Features
-
-| Feature | Streaming | Non-Streaming |
-|---------|-----------|---------------|
-| Text generation | ✅ | ✅ |
-| Reasoning/thinking content | ✅ | ✅ |
-| Function/tool calls | ✅ | ✅ |
-| Usage tracking (billing) | ✅ | ✅ |
-| System instructions | ✅ | ✅ |
-| Multimodal input (images) | ✅ | ✅ |
-| Max output tokens / truncation | ✅ | ✅ |
-
-### Streaming Events
-
-The proxy emits standard Responses API streaming events:
-
-- `response.created`, `response.in_progress`
-- `response.output_item.added`, `response.output_item.done`
-- `response.content_part.added`, `response.content_part.done`
-- `response.output_text.delta`, `response.output_text.done`
-- `response.reasoning_text.delta`, `response.reasoning_text.done` (thinking mode)
-- `response.function_call_arguments.delta`, `response.function_call_arguments.done` (tool calls)
-- `response.completed`
-
-### vLLM Backend Requirements
-
-For full functionality, the vLLM backend should be started with the following flags:
-
-```bash
---reasoning-parser=qwen3                                  # Required for thinking/reasoning mode
---enable-auto-tool-choice --tool-call-parser=qwen3_coder  # Required for tool/function calls
+**Client Request (Honcho sends this):**
+```json
+POST /v1/embeddings
+{
+  "model": "openai/text-embedding-3-large",
+  "input": "Hello, world!"
+}
 ```
 
-## Tokenize API
+**Backend Request (after transformation):**
+```json
+POST /v1/embeddings
+{
+  "model": "Qwen/Qwen3-Embedding-4B",
+  "input": "Hello, world!",
+  "dimensions": 1536
+}
+```
 
-The proxy provides a `/tokenize` endpoint that forwards tokenization requests to the backend. When a request is sent in Responses API format (using the `messages` field with Responses-style message objects), the proxy applies the same format conversion as the `/v1/responses` endpoint:
+**Client Response (model name restored for Honcho):**
+```json
+{
+  "object": "list",
+  "data": [...],
+  "model": "openai/text-embedding-3-large",
+  "usage": {...}
+}
+```
 
-- **Message conversion**: Responses API format → Chat Completions format
-- **Tool conversion**: Responses tool format → Chat Completions tool format
+### Honcho Integration Example
 
-This ensures consistency: clients using the Responses API for generation requests can use the same format for tokenization, without needing to know the backend's expected format. The endpoint also supports multimodal inputs (images, etc.) in either format.
+**vLLM embedding server (Docker Compose):**
+```yaml
+services:
+  vllm-embedding:
+    image: vllm/vllm-openai:latest
+    command:
+      - Qwen/Qwen3-Embedding-4B
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.5"
+      - --hf-overrides
+      - '{"is_matryoshka": true, "matryoshka_dimensions": [1536]}'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+```
+
+**honcho-embed-rp (Docker Compose):**
+```yaml
+services:
+  honcho-embed-rp:
+    image: honcho-embed-rp:latest
+    environment:
+      - HONCHOEMBEDRP_TARGET=http://vllm-embedding:8000
+      - HONCHOEMBEDRP_SERVED_MODEL_NAME=Qwen/Qwen3-Embedding-4B
+      - HONCHOEMBEDRP_DIMENSIONS=1536
+    ports:
+      - "9000:9000"
+```
+
+**Honcho environment variables:**
+```bash
+# Point OpenAI-compatible provider to the proxy
+LLM_OPENAI_COMPATIBLE_BASE_URL=http://honcho-embed-rp:9000/v1
+LLM_OPENAI_COMPATIBLE_API_KEY=sk-no-key-required
+
+# Use openrouter provider (supports custom base URL)
+# Honcho will request model: openai/text-embedding-3-large
+LLM_EMBEDDING_PROVIDER=openrouter
+```
+
+# vLLM provider for LLM calls (separate endpoint)
+DERIVER_PROVIDER=vllm
+DERIVER_MODEL="your-llm-model-name"
+LLM_VLLM_BASE_URL=http://your-vllm-llm:8000/v1
+LLM_VLLM_API_KEY=your-api-key
+```
+
+With this setup:
+- Honcho requests embeddings from `openai/text-embedding-3-large` at the proxy (hardcoded by openrouter provider)
+- Proxy rewrites to `Qwen/Qwen3-Embedding-4B` with `dimensions: 1536`
+- vLLM serves the Qwen model with Matryoshka embeddings at 1536 dimensions
+- Response model name is rewritten back to `openai/text-embedding-3-large` for Honcho compatibility
 
 ## Health Check
 
@@ -151,45 +188,7 @@ The proxy supports the following log levels:
 
 When set to `COMPLETE`, the proxy will log full HTTP request and response bodies, which is useful for debugging but very verbose.
 
-⚠️ **Privacy Warning**: LLM requests often contain sensitive or personal data (conversation history, personal information, confidential content). The `COMPLETE` log level will expose all this data in plaintext. Only enable it in secure, non-production environments or ensure logs are properly secured and retained temporarily.
-
-## systemd Integration
-
-The proxy includes native systemd support for production deployments:
-
-- **Type**: `notify` - The proxy signals readiness to systemd automatically
-- **Status Updates**: Sends periodic status updates to systemd showing processed request counts
-- **Graceful Shutdown**: Properly signals systemd when stopping
-- **Journald Logging**: Structured logging output is compatible with journald
-
-Example systemd unit file:
-
-```ini
-[Unit]
-Description=Qwen 3.5 Reverse Proxy
-After=network.target
-
-[Service]
-Type=notify
-User=qwen35-rp
-Group=qwen35-rp
-ExecStart=/usr/local/bin/qwen35-rp -served-model "Qwen/Qwen3.5-397B-A17B-FP8" -thinking-general "qwen-thinking-general" -thinking-coding "qwen-thinking-coding" -instruct-general "qwen-instruct-general" -instruct-reasoning "qwen-instruct-reasoning"
-Restart=on-failure
-Environment=QWEN35RP_LOGLEVEL=INFO
-
-[Install]
-WantedBy=multi-user.target
-```
-
-⚠️ **Security Best Practice**: Always run the proxy under a dedicated, unprivileged user account (e.g., `qwen35-rp`). Never run as root. Create the user with:
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin qwen35-rp
-sudo chown qwen35-rp:qwen35-rp /usr/local/bin/qwen35-rp
-```
-
-## Graceful Shutdown
-
-The server supports graceful shutdown with a 3-minute timeout to allow in-flight requests to complete. Send `SIGINT` or `SIGTERM` to initiate shutdown. When running under systemd, the proxy will automatically signal the service manager when ready and during shutdown.
+⚠️ **Privacy Warning**: Embedding requests may contain sensitive or personal data. The `COMPLETE` log level will expose all this data in plaintext. Only enable it in secure, non-production environments or ensure logs are properly secured and retained temporarily.
 
 ## License
 

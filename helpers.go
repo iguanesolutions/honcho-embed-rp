@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,31 +58,6 @@ func rewriteRequestURL(req *http.Request, target *url.URL) {
 	}
 }
 
-// applySamplingParams applies sampling parameters to request data
-// If enforce is true, parameters are always set, overriding any client-provided values
-func applySamplingParams(data map[string]any, samplingParams map[string]any, logger *slog.Logger, enforce bool) {
-	for k, v := range samplingParams {
-		if _, ok := data[k]; ok {
-			if enforce {
-				logger.Debug("enforcing sampling parameter",
-					slog.Any("key", k),
-					slog.Any("old_value", data[k]),
-					slog.Any("new_value", v),
-				)
-				data[k] = v
-			} else {
-				logger.Debug("key already set in request, not modifying",
-					slog.Any("key", k),
-					slog.Any("value", data[k]),
-					slog.Any("default_value", v),
-				)
-			}
-			continue
-		}
-		data[k] = v
-	}
-}
-
 // httpError writes HTTP error response
 func httpError(ctx context.Context, w http.ResponseWriter, statusCode int) {
 	http.Error(w,
@@ -94,7 +68,7 @@ func httpError(ctx context.Context, w http.ResponseWriter, statusCode int) {
 
 // generateErrorClientText generates error text with request ID
 func generateErrorClientText(ctx context.Context, statusCode int) string {
-	return fmt.Sprintf("%s - check qwen35-rp logs for more details (request id #%v)",
+	return fmt.Sprintf("%s - check honcho-embed-rp logs for more details (request id #%v)",
 		http.StatusText(statusCode),
 		ctx.Value(httplog.ReqIDKey),
 	)

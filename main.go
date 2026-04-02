@@ -16,8 +16,6 @@ import (
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/hekmon/httplog/v3"
 	autoslog "github.com/iguanesolutions/auto-slog/v2"
-	sysd "github.com/iguanesolutions/go-systemd/v6"
-	sysdnotify "github.com/iguanesolutions/go-systemd/v6/notify"
 )
 
 const (
@@ -59,38 +57,11 @@ func main() {
 	})
 	// Create pooled HTTP client for forwarding requests
 	httpClient := cleanhttp.DefaultPooledClient()
-	// Explicit handlers for POST paths that need transformation
-	http.HandleFunc("POST /tokenize", httplogger.LogFunc(
-		tokenize(httpClient, backendURL,
-			cfg.ServedModelName, cfg.ThinkingGeneralModel, cfg.ThinkingCodingModel,
-			cfg.InstructGeneralModel, cfg.InstructReasoningModel,
-		),
+	// Handler for /v1/embeddings endpoint (rewrites model name and adds dimensions)
+	http.HandleFunc("POST /v1/embeddings", httplogger.LogFunc(
+		embeddings(httpClient, backendURL, cfg.ServedModelName, cfg.Dimensions),
 	))
-	http.HandleFunc("POST /v1/responses", httplogger.LogFunc(
-		responses(httpClient, backendURL,
-			cfg.ServedModelName, cfg.ThinkingGeneralModel, cfg.ThinkingCodingModel,
-			cfg.InstructGeneralModel, cfg.InstructReasoningModel, cfg.EnforceSamplingParams,
-		),
-	))
-	http.HandleFunc("POST /v1/chat/completions", httplogger.LogFunc(
-		transform(httpClient, backendURL,
-			cfg.ServedModelName, cfg.ThinkingGeneralModel, cfg.ThinkingCodingModel,
-			cfg.InstructGeneralModel, cfg.InstructReasoningModel, cfg.EnforceSamplingParams,
-		),
-	))
-	http.HandleFunc("POST /v1/completions", httplogger.LogFunc(
-		transform(httpClient, backendURL,
-			cfg.ServedModelName, cfg.ThinkingGeneralModel, cfg.ThinkingCodingModel,
-			cfg.InstructGeneralModel, cfg.InstructReasoningModel, cfg.EnforceSamplingParams,
-		),
-	))
-	// Models endpoint handler (enriches backend models with virtual model names)
-	http.HandleFunc("GET /v1/models", httplogger.LogFunc(
-		models(httpClient, backendURL,
-			cfg.ServedModelName, cfg.ThinkingGeneralModel, cfg.ThinkingCodingModel,
-			cfg.InstructGeneralModel, cfg.InstructReasoningModel),
-	))
-	// Health check endpoints (not logged)
+	// Health check endpoint (not logged)
 	http.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -105,15 +76,7 @@ func main() {
 	defer signalStopCtxCancel()
 	go cleanStop(signalStopCtx, server)
 
-	// Handle systemd if needed
-	if invocationID, sysdStarted := sysd.GetInvocationID(); sysdStarted {
-		logger.Info("systemd detected, activating systemd integration",
-			slog.String("invocation_id", invocationID),
-		)
-		go systemdIntegration(signalStopCtx, httplogger)
-	} else {
-		logger.Debug("systemd not detected, skipping systemd integration")
-	}
+	logger.Debug("skipping systemd integration")
 
 	// Start server
 	logger.Info("starting reverse proxy server",
@@ -124,32 +87,6 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("failed to start HTTP server", "err", err)
 		os.Exit(1)
-	}
-}
-
-func systemdIntegration(signalStopCtx context.Context, httplogger *httplog.Logger) {
-	var err error
-	if err = sysdnotify.Ready(); err != nil {
-		logger.Error("failed to send systemd ready notification", "err", err)
-	}
-	sysdUpdateTicker := time.NewTicker(time.Minute)
-	defer sysdUpdateTicker.Stop()
-	for {
-		select {
-		case <-sysdUpdateTicker.C:
-			logger.Debug("sending systemd status notification")
-			if err = sysdnotify.Status(fmt.Sprintf("Modified %d requests on the %d proxified",
-				modifiedRequests.Load(),
-				httplogger.TotalRequests(),
-			)); err != nil {
-				logger.Error("failed to send systemd status notification", "err", err)
-			}
-		case <-signalStopCtx.Done():
-			if err = sysdnotify.Stopping(); err != nil {
-				logger.Error("failed to send systemd stopping notification", "err", err)
-			}
-			return
-		}
 	}
 }
 
