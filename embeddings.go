@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 
 	"github.com/hekmon/httplog/v3"
@@ -93,8 +94,8 @@ func embeddings(httpCli *http.Client, target *url.URL, servedModel string, dimen
 		// Construct backend URL: target base + /embeddings (ignore incoming request path)
 		outreq.URL.Scheme = target.Scheme
 		outreq.URL.Host = target.Host
-		outreq.URL.Path = target.Path + "/embeddings"
-		outreq.URL.RawPath = target.RawPath + "/embeddings"
+		outreq.URL.Path = path.Join(target.Path, "/embeddings")
+		outreq.URL.RawPath = "" // Clear RawPath, let Go handle encoding via EscapedPath
 		outreq.URL.RawQuery = target.RawQuery
 		outreq.Host = target.Host // Explicitly set Host header for backend
 		logger.Debug("backend URL constructed",
